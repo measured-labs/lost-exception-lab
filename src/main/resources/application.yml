@@ -1,0 +1,251 @@
+# ============================================================
+# ExceptionRadar Configuration
+# ============================================================
+
+exception-radar:
+  enabled: true
+
+  # ==========================================================
+  # Phase 1: Foundation
+  # ==========================================================
+
+  # Event Bus 설정
+  event-bus:
+    async: true
+    # Ring Buffer 크기 (2의 제곱수 권장)
+    buffer-size: 1024
+    # 버퍼 풀 시 처리 전략: drop | block
+    overflow-strategy: drop
+
+  # Exception Collector 설정
+  collector:
+    # 스택 트레이스 최대 깊이
+    max-stack-depth: 50
+    # 인과 관계 체인 최대 길이
+    max-causation-depth: 10
+    # 메타데이터 수집 여부
+    collect-metadata: true
+    # 수집할 메타데이터 항목
+    metadata-items:
+      - thread-name
+      - thread-id
+      - timestamp
+      - memory-usage
+
+  # 예외 필터링
+  filter:
+    # 무시할 예외 클래스
+    ignore-exceptions:
+      - java.lang.InterruptedException
+      - java.util.concurrent.CancellationException
+    # 무시할 예외 메시지 패턴 (정규식)
+    ignore-patterns:
+      - ".*Connection reset.*"
+      - ".*Broken pipe.*"
+
+  # ==========================================================
+  # Phase 2: Thread Tracking
+  # ==========================================================
+
+  thread:
+    # 미처리 예외 추적 (UncaughtExceptionHandler)
+    track-uncaught: true
+    # Virtual Thread 추적 (Java 21+)
+    track-virtual-threads: true
+    # 추적할 스레드풀 이름 패턴 (정규식)
+    include-patterns:
+      - "pool-.*"
+      - "ForkJoinPool.*"
+    # 제외할 스레드 이름 패턴
+    exclude-patterns:
+      - ".*-monitor-.*"
+      - ".*-internal-.*"
+
+  # Async 추적 설정
+  async:
+    # CompletableFuture 체인 추적
+    track-completable-future: true
+    # 컨텍스트 자동 전파
+    propagate-context: true
+
+  # ==========================================================
+  # Phase 3: Reporting
+  # ==========================================================
+
+  reporter:
+    # 콘솔 리포터
+    console:
+      enabled: true
+      # 출력 레벨: ERROR, WARN, INFO, DEBUG
+      level: ERROR
+      # 전체 스택 트레이스 출력
+      full-stack-trace: true
+
+    # 파일 리포터
+    file:
+      enabled: true
+      path: logs/exceptions.log
+      # 출력 포맷: json | text
+      format: json
+      # 파일 롤링 설정
+      max-size: 10MB
+      max-history: 7
+
+  # 메트릭 설정 (Micrometer)
+  metrics:
+    enabled: true
+    # 메트릭 이름 접두사
+    prefix: exception.radar
+    # 추가 태그
+    tags:
+      application: ${APPLICATION_NAME:exception-radar}
+
+  # ==========================================================
+  # Phase 4: Process Tracking
+  # ==========================================================
+
+  process:
+    enabled: true
+    # 자식 프로세스 헬스체크 간격
+    health-check-interval: 5s
+    # 프로세스 종료 대기 타임아웃
+    shutdown-timeout: 30s
+    # IPC 방식: unix-socket | tcp
+    ipc-type: unix-socket
+    # Unix Domain Socket 경로
+    socket-path: /tmp/exception-radar.sock
+    # TCP 사용 시 설정 (unix-socket 미지원 환경)
+    tcp:
+      port: 9999
+      host: localhost
+
+  # ==========================================================
+  # Phase 5: Analysis & Resilience
+  # ==========================================================
+
+  analyzer:
+    enabled: true
+    # 예외 패턴 감지
+    pattern-detection: true
+    # 분석 윈도우 크기
+    window-size: 5m
+    # 패턴으로 인식할 최소 빈도
+    min-frequency: 3
+
+  resilience:
+    # 재시도 설정
+    retry:
+      enabled: true
+      max-attempts: 3
+      # 재시도 간격 (백오프)
+      backoff: 1s
+      # 재시도 대상 예외
+      retry-on:
+        - java.io.IOException
+        - java.net.SocketTimeoutException
+
+    # 서킷 브레이커 설정
+    circuit-breaker:
+      enabled: true
+      # 실패 임계값 (이 횟수 초과 시 OPEN)
+      failure-threshold: 5
+      # OPEN 상태 유지 시간
+      reset-timeout: 1m
+      # HALF_OPEN 상태에서 허용할 요청 수
+      half-open-requests: 3
+
+  # ==========================================================
+  # Phase 6: Dashboard & Alert
+  # ==========================================================
+
+  dashboard:
+    enabled: true
+    # HTTP 서버 포트
+    port: 8080
+    # 바인딩 주소
+    host: 0.0.0.0
+    # WebSocket 활성화
+    websocket: true
+    # 정적 파일 경로
+    static-path: /dashboard
+
+  alert:
+    enabled: true
+    # 알림 채널 설정
+    channels:
+      # Slack
+      slack:
+        enabled: false
+        webhook-url: ${SLACK_WEBHOOK_URL:}
+        # 알림 대상 채널
+        channel: "#alerts"
+        # 멘션할 사용자
+        mentions:
+          - "@oncall"
+
+      # Email
+      email:
+        enabled: false
+        smtp-host: ${SMTP_HOST:localhost}
+        smtp-port: ${SMTP_PORT:587}
+        username: ${SMTP_USERNAME:}
+        password: ${SMTP_PASSWORD:}
+        from: exception-radar@example.com
+        to:
+          - ops-team@example.com
+
+      # Webhook (범용)
+      webhook:
+        enabled: false
+        url: ${WEBHOOK_URL:}
+        # HTTP 메서드: POST | PUT
+        method: POST
+        # 추가 헤더
+        headers:
+          Authorization: "Bearer ${WEBHOOK_TOKEN:}"
+
+  # ==========================================================
+  # Phase 7: OS Level Monitoring (Java Agent)
+  # ==========================================================
+
+  agent:
+    # 자동 계측 대상 클래스
+    intercept:
+      - java.util.concurrent.ThreadPoolExecutor
+      - java.util.concurrent.ForkJoinPool
+      - java.util.concurrent.ScheduledThreadPoolExecutor
+    # 계측 제외 패키지
+    exclude:
+      - com.exceptionradar.*
+      - sun.*
+      - jdk.*
+    # 시그널 핸들링 활성화
+    signal-handling: true
+    # 네이티브 크래시 감지
+    native-crash-detection: false
+
+  # ==========================================================
+  # Phase 8: Distributed Tracing
+  # ==========================================================
+
+  tracing:
+    enabled: false
+    # Trace ID 전파 방식: w3c | b3
+    propagation: w3c
+    # 내보내기 방식: otlp | jaeger | zipkin
+    exporter: otlp
+    # OTLP 엔드포인트
+    endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
+    # 샘플링 비율 (0.0 ~ 1.0)
+    sampling-rate: 1.0
+
+  # ==========================================================
+  # Debug
+  # ==========================================================
+
+  debug:
+    enabled: false
+    # 내부 이벤트 로깅
+    log-internal-events: false
+    # 상세 스택 트레이스
+    verbose-stack-trace: false

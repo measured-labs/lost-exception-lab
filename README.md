@@ -1,15 +1,15 @@
 # ExceptionRadar
 
-> Cross-Process/Thread Exception Tracking System for Java Applications
+> Java 애플리케이션에서 프로세스 및 스레드 경계를 넘어 예외를 추적하고 감시하는 시스템
 
-## Overview
+## 개요
 
-ExceptionRadar는 Java 애플리케이션에서 프로세스 및 스레드 경계를 넘어 예외를 추적하고 감시하는 시스템입니다. 특히 async/await 패턴과 멀티스레드 환경에서 발생하는 예외를 OS 레벨에서 감지하고 추적할 수 있는 메커니즘을 제공합니다.
+ExceptionRadar는 Java 멀티스레드/멀티프로세스 환경에서 "잃어버린 예외"를 추적합니다. async/await 패턴, ExecutorService, Virtual Thread 등에서 발생하는 예외를 감지하고 중앙에서 모니터링할 수 있는 메커니즘을 제공합니다.
 
 ### 핵심 문제 정의
 
 ```java
-// 기존 문제점
+// 이 예외는 어디로 갔을까?
 try {
     CompletableFuture<String> future = CompletableFuture.supplyAsync(() -> {
         throw new RuntimeException("This exception is lost!");
@@ -26,7 +26,10 @@ try {
 
 1. **크로스 스레드 예외 추적**: 독립된 스레드에서 발생한 예외를 메인 스레드에서 인지
 2. **크로스 프로세스 예외 추적**: 자식 프로세스에서 발생한 예외를 부모 프로세스에서 감지
-3. **OS 레벨 모니터링**: JVM을 넘어선 시스템 레벨의 예외 감지
+3. **JVM/OS 레벨 모니터링**:
+    - Java Agent를 통한 기존 코드 자동 계측
+    - JVM 시그널 핸들링 (SIGSEGV, SIGABRT 등)
+    - Native Crash 감지
 4. **실시간 예외 리포팅**: 예외 발생 즉시 중앙 모니터링 시스템으로 전달
 5. **예외 컨텍스트 보존**: 예외가 발생한 전체 컨텍스트와 스택 트레이스 유지
 
@@ -35,68 +38,151 @@ try {
 ### 시스템 구성도
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    ExceptionRadar Core                   │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
-│  │   Thread     │  │   Process    │  │   Exception  │ │
-│  │   Monitor    │  │   Monitor    │  │   Collector  │ │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘ │
-│         │                  │                  │         │
-│  ┌──────▼──────────────────▼──────────────────▼──────┐ │
-│  │            Exception Event Bus                     │ │
-│  └──────┬──────────────────┬──────────────────┬──────┘ │
-│         │                  │                  │         │
-│  ┌──────▼───────┐  ┌──────▼───────┐  ┌──────▼──────┐ │
-│  │   Reporter   │  │   Analyzer   │  │   Storage   │ │
-│  └──────────────┘  └──────────────┘  └─────────────┘ │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                      ExceptionRadar Core                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐    │
+│  │    Thread      │  │    Process     │  │   Async        │    │
+│  │    Monitor     │  │    Monitor     │  │   Tracker      │    │
+│  └───────┬────────┘  └───────┬────────┘  └───────┬────────┘    │
+│          │                   │                   │              │
+│  ┌───────▼───────────────────▼───────────────────▼───────┐     │
+│  │                  Exception Collector                   │     │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐     │     │
+│  │  │  Context    │ │ StackTrace  │ │  Causation  │     │     │
+│  │  │  Builder    │ │  Analyzer   │ │  Chain      │     │     │
+│  │  └─────────────┘ └─────────────┘ └─────────────┘     │     │
+│  └───────────────────────────┬───────────────────────────┘     │
+│                              │                                  │
+│  ┌───────────────────────────▼───────────────────────────┐     │
+│  │                    Event Bus                           │     │
+│  │            (Pub/Sub + Ring Buffer)                     │     │
+│  └──┬──────────────┬──────────────┬──────────────┬───────┘     │
+│     │              │              │              │              │
+│  ┌──▼────┐    ┌────▼────┐   ┌────▼────┐   ┌────▼────┐        │
+│  │Report │    │ Analyze │   │ Storage │   │ Alert   │        │
+│  │  er   │    │    r    │   │         │   │ System  │        │
+│  └───────┘    └─────────┘   └─────────┘   └─────────┘        │
+│                                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│                      Dashboard (Web UI)                          │
+├─────────────────────────────────────────────────────────────────┤
+│                      Java Agent (OS Level)                       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### 핵심 컴포넌트
+## 구현 로드맵
 
-#### 1. Thread Monitor
-- **ThreadPoolMonitor**: ExecutorService 기반 스레드풀 감시
-- **VirtualThreadMonitor**: Java 21 Virtual Thread 감시
-- **UncaughtExceptionInterceptor**: 캐치되지 않은 예외 가로채기
+### Phase 1: Foundation (기반)
+> 핵심 모델과 이벤트 시스템 구축
 
-#### 2. Process Monitor
-- **ProcessWatcher**: 자식 프로세스 생성 및 감시
-- **ProcessCommunicator**: IPC를 통한 예외 정보 전달
-- **ProcessRegistry**: 활성 프로세스 추적 및 관리
+- [ ] Core 모델 (ExceptionContext, ExceptionEvent)
+- [ ] 설정 시스템 (ExceptionRadarConfig, YAML 로더)
+- [ ] Event Bus (Ring Buffer 기반)
+- [ ] Handler 인터페이스 정의
 
-#### 3. Exception Collector
-- **ExceptionContext**: 예외 발생 컨텍스트 수집
-- **StackTraceAnalyzer**: 스택 트레이스 분석 및 정리
-- **ExceptionChain**: 예외 체인 추적 및 관리
+**학습 포인트**: Record, Builder 패턴, Lock-free 자료구조
 
-#### 4. Event Bus
-- **ExceptionEvent**: 예외 이벤트 모델
-- **EventDispatcher**: 이벤트 라우팅 및 배포
-- **EventSubscriber**: 이벤트 구독 및 처리
+### Phase 2: Thread Tracking (스레드 추적)
+> 스레드 레벨 예외 추적 구현
 
-#### 5. Reporting & Analysis
-- **RealTimeReporter**: 실시간 예외 리포팅
-- **ExceptionAnalyzer**: 예외 패턴 분석
-- **MetricsCollector**: 예외 관련 메트릭 수집
+- [ ] UncaughtExceptionHandler 글로벌 설정
+- [ ] ThreadPool Wrapper (ExecutorService 래핑)
+- [ ] CompletableFuture Tracker
+- [ ] Virtual Thread Monitor (Java 21)
+- [ ] Context Propagation (ThreadLocal 기반)
+
+**학습 포인트**: Java Concurrency 심화, ThreadLocal, Virtual Thread
+
+### Phase 3: Reporting (리포팅)
+> 예외 리포팅 시스템 구현
+
+- [ ] ConsoleReporter
+- [ ] FileReporter (JSON/Text 포맷)
+- [ ] MetricsReporter (Micrometer 연동)
+
+**학습 포인트**: SLF4J 통합, Micrometer 메트릭
+
+### Phase 4: Process Tracking (프로세스 추적)
+> 프로세스 간 예외 전파 시스템 구현
+
+- [ ] ManagedProcess (ProcessBuilder 래핑)
+- [ ] Unix Domain Socket IPC
+- [ ] 통신 프로토콜 설계 (JSON 기반)
+- [ ] ProcessRegistry (활성 프로세스 관리)
+- [ ] Child Process Agent (자식용 경량 모듈)
+
+**학습 포인트**: IPC, Unix Domain Socket, 프로토콜 설계
+
+### Phase 5: Analysis & Resilience (분석/복원)
+> 예외 분석 및 자동 복구 메커니즘 구현
+
+- [ ] Pattern Detector (예외 패턴 인식)
+- [ ] Historical Analyzer (시계열 분석)
+- [ ] Retry Mechanism (자동 재시도)
+- [ ] Circuit Breaker (서킷 브레이커)
+
+**학습 포인트**: 시계열 분석, 상태 머신, 디자인 패턴
+
+### Phase 6: Dashboard & Alert (대시보드/알림)
+> 실시간 모니터링 대시보드 및 알림 시스템 구현
+
+- [ ] 내장 HTTP 서버 (com.sun.net.httpserver)
+- [ ] WebSocket 핸들러
+- [ ] REST API
+- [ ] 웹 UI (정적 파일)
+- [ ] Alert Manager
+- [ ] Alert Channels (Slack, Email, Webhook)
+
+**학습 포인트**: HTTP 서버, WebSocket, 비동기 I/O
+
+### Phase 7: OS Level Monitoring (OS 레벨)
+> Java Agent 및 네이티브 레벨 모니터링 구현
+
+- [ ] Java Agent 기초 (Instrumentation API)
+- [ ] 바이트코드 조작 (ByteBuddy)
+- [ ] 기존 스레드풀 자동 가로채기
+- [ ] JVM Signal Handler (SIGSEGV, SIGABRT 등)
+- [ ] Native Crash 감지 (JNI)
+
+**학습 포인트**: Java Agent, 바이트코드 조작, JNI, 시스템 프로그래밍
+
+### Phase 8: Distributed Tracing (분산 추적)
+> 분산 환경에서의 예외 추적 구현
+
+- [ ] Trace Context 모델
+- [ ] OpenTelemetry 연동
+- [ ] 크로스 서비스 예외 전파
+
+**학습 포인트**: 분산 시스템, OpenTelemetry, 컨텍스트 전파
 
 ## 기술 스택
 
+### Core (Phase 1-6)
 - **Java 21**: Virtual Threads, Pattern Matching, Record Classes
 - **Concurrency**: CompletableFuture, ExecutorService, ForkJoinPool
-- **IPC**: Unix Domain Sockets, Named Pipes, Shared Memory
-- **Serialization**: Jackson (JSON), Protocol Buffers
-- **Monitoring**: Micrometer, JMX
+- **IPC**: Unix Domain Sockets (Java 16+)
+- **Serialization**: Jackson (JSON)
+- **Monitoring**: Micrometer
 - **Logging**: SLF4J + Logback
+
+### Advanced (Phase 7-8)
+- **Agent**: ByteBuddy (바이트코드 조작)
+- **Native**: JNI (네이티브 크래시 감지)
+- **Tracing**: OpenTelemetry
 
 ## 주요 기능
 
 ### 1. Thread Exception Tracking
 
 ```java
-// ExceptionRadar가 자동으로 추적
-ExceptionRadar radar = ExceptionRadar.getInstance();
+// ExceptionRadar 초기화
+ExceptionRadar radar = ExceptionRadar.builder()
+    .enableThreadTracking()
+    .build();
+
+// 스레드풀 감시
 radar.trackThreadPool(executorService);
 
 // 이제 모든 스레드의 예외가 추적됨
@@ -116,6 +202,12 @@ Process child = monitor.execute("java", "-jar", "child-app.jar");
 monitor.onException(exception -> {
     log.error("Child process exception: ", exception);
 });
+
+// 활성 프로세스 조회
+ProcessRegistry registry = monitor.getRegistry();
+registry.getActiveProcesses().forEach(p -> 
+    log.info("Process {} is running", p.pid())
+);
 ```
 
 ### 3. Async/Await Exception Handling
@@ -141,132 +233,304 @@ ExceptionDashboard dashboard = radar.startDashboard(8080);
 // 실시간 예외 발생 현황, 통계, 분석 결과 확인
 ```
 
-## 구현 계획
-
-### Phase 1: Core Foundation
-- [ ] Basic thread exception tracking
-- [ ] UncaughtExceptionHandler 구현
-- [ ] ThreadLocal exception context
-- [ ] Simple event bus
-
-### Phase 2: Thread Pool Integration
-- [ ] ExecutorService wrapper
-- [ ] ForkJoinPool integration
-- [ ] Virtual Thread support (Java 21)
-- [ ] Custom ThreadFactory
-
-### Phase 3: Process Monitoring
-- [ ] Process spawn wrapper
-- [ ] IPC mechanism (Unix Domain Socket)
-- [ ] Process registry
-- [ ] Parent-child communication protocol
-
-### Phase 4: Advanced Features
-- [ ] Exception pattern recognition
-- [ ] Automatic retry mechanism
-- [ ] Circuit breaker integration
-- [ ] Distributed tracing support
-
-### Phase 5: Reporting & Analytics
-- [ ] Real-time dashboard
-- [ ] Metrics collection
-- [ ] Alert system
-- [ ] Historical analysis
-
-## 사용 사례
-
-### 1. Microservice Architecture
-- 서비스 간 예외 전파 추적
-- 분산 트랜잭션 실패 원인 분석
-- 서비스 메시 내 예외 플로우 시각화
-
-### 2. Batch Processing
-- 병렬 배치 작업 예외 모니터링
-- 실패한 작업 자동 재시도
-- 예외 패턴 기반 작업 최적화
-
-### 3. Real-time Systems
-- 실시간 예외 알림
-- 임계 예외 자동 에스컬레이션
-- 예외 발생 예측 및 예방
-
-## 예제 코드
-
-### 기본 사용법
+### 5. Exception Pattern Analysis
 
 ```java
-public class Main {
-    public static void main(String[] args) {
-        // ExceptionRadar 초기화
-        ExceptionRadar radar = ExceptionRadar.builder()
-            .enableThreadTracking()
-            .enableProcessTracking()
-            .withReporter(new ConsoleReporter())
-            .withReporter(new FileReporter("exceptions.log"))
-            .build();
-        
-        // 글로벌 레이더 설정
-        ExceptionRadar.setGlobal(radar);
-        
-        // 애플리케이션 로직
-        try (radar) {
-            runApplication();
-        }
+// 예외 패턴 분석기 설정
+ExceptionAnalyzer analyzer = radar.getAnalyzer();
+
+// 패턴 감지 시 콜백
+analyzer.onPatternDetected(pattern -> {
+    log.warn("Recurring exception pattern detected: {}", pattern);
+    if (pattern.frequency() > 10) {
+        alertManager.sendAlert(pattern);
     }
-}
+});
 ```
 
-### 커스텀 예외 핸들러
+### 6. Auto Retry & Circuit Breaker
 
 ```java
-public class CustomExceptionHandler implements ExceptionHandler {
-    @Override
-    public void handle(ExceptionContext context) {
-        Exception e = context.getException();
-        Thread thread = context.getThread();
-        Instant timestamp = context.getTimestamp();
-        
-        // 커스텀 처리 로직
-        if (e instanceof CriticalException) {
-            alertOpsTeam(e, thread, timestamp);
-        }
-        
-        // 메트릭 수집
-        MetricsCollector.record(e.getClass(), thread.getName());
-    }
-}
+// 재시도 메커니즘 설정
+RetryConfig retryConfig = RetryConfig.builder()
+    .maxAttempts(3)
+    .backoff(Duration.ofSeconds(1))
+    .retryOn(TransientException.class)
+    .build();
+
+// Circuit Breaker 설정
+CircuitBreakerConfig cbConfig = CircuitBreakerConfig.builder()
+    .failureThreshold(5)
+    .resetTimeout(Duration.ofMinutes(1))
+    .build();
+
+radar.withResilience(retryConfig, cbConfig);
 ```
 
-### 프로세스 간 통신
+### 7. Java Agent (자동 계측)
+
+```bash
+# Agent를 사용하여 기존 애플리케이션 계측
+java -javaagent:exception-radar-agent.jar -jar your-app.jar
+```
 
 ```java
-// Parent Process
-public class ParentProcess {
-    public static void main(String[] args) {
-        ProcessMonitor monitor = new ProcessMonitor();
-        
-        Process child = monitor.spawn(
-            "java", "-cp", "child.jar", "ChildProcess"
-        );
-        
-        monitor.onException((processId, exception) -> {
-            System.err.printf("Process %d failed: %s%n", 
-                processId, exception.getMessage());
-        });
-        
-        monitor.waitForAll();
-    }
-}
+// Agent 설정 (agent.yml)
+exception-radar-agent:
+  intercept:
+    - java.util.concurrent.ExecutorService
+    - java.util.concurrent.ForkJoinPool
+  exclude:
+    - com.example.internal.*
+```
 
-// Child Process
-public class ChildProcess {
-    public static void main(String[] args) {
-        ExceptionRadar.enableIPCReporting();
-        
-        // 이 예외는 부모 프로세스로 전달됨
-        throw new RuntimeException("Child process error");
-    }
-}
+### 8. Distributed Tracing Integration
+
+```java
+// OpenTelemetry 연동
+radar.enableDistributedTracing(openTelemetry);
+
+// 분산 환경에서 예외 추적
+// Trace ID, Span ID가 예외 컨텍스트에 포함됨
+```
+
+## 설정
+
+### application.yml
+
+```yaml
+exception-radar:
+  enabled: true
+
+  # Phase 2: Thread Tracking
+  thread:
+    track-uncaught: true
+    track-virtual-threads: true
+    include-patterns:
+      - "pool-.*"
+      - "ForkJoinPool.*"
+    exclude-patterns:
+      - ".*-monitor-.*"
+
+  # Phase 4: Process Tracking  
+  process:
+    enabled: true
+    health-check-interval: 5s
+    shutdown-timeout: 30s
+    ipc-type: unix-socket
+
+  # Phase 2: Async Tracking
+  async:
+    track-completable-future: true
+    propagate-context: true
+
+  # Phase 1: Event Bus
+  event-bus:
+    async: true
+    buffer-size: 1024
+    overflow-strategy: drop
+
+  # Phase 1: Collector
+  collector:
+    max-stack-depth: 50
+    max-causation-depth: 10
+    collect-metadata: true
+
+  # Phase 3: Reporters
+  reporter:
+    console:
+      enabled: true
+    file:
+      enabled: true
+      path: logs/exceptions.log
+      format: json
+
+  # Phase 5: Analyzer
+  analyzer:
+    enabled: true
+    pattern-detection: true
+    window-size: 5m
+    min-frequency: 3
+
+  # Phase 5: Resilience
+  resilience:
+    retry:
+      enabled: true
+      max-attempts: 3
+      backoff: 1s
+    circuit-breaker:
+      enabled: true
+      failure-threshold: 5
+      reset-timeout: 1m
+
+  # Phase 6: Alert
+  alert:
+    enabled: true
+    channels:
+      slack:
+        enabled: false
+        webhook-url: ${SLACK_WEBHOOK_URL:}
+      email:
+        enabled: false
+        smtp-host: ${SMTP_HOST:localhost}
+
+  # Phase 6: Dashboard
+  dashboard:
+    enabled: true
+    port: 8080
+    websocket: true
+
+  # Phase 8: Distributed Tracing
+  tracing:
+    enabled: false
+    exporter: otlp
+
+  # Phase 3: Metrics
+  metrics:
+    enabled: true
+    prefix: exception.radar
+
+  # Filter
+  filter:
+    ignore-exceptions:
+      - java.lang.InterruptedException
+      - java.util.concurrent.CancellationException
+    ignore-patterns:
+      - ".*Connection reset.*"
+
+  debug:
+    enabled: false
+    log-internal-events: false
+```
+
+## 프로젝트 구조
+
+```
+ExceptionRadar/
+├── src/
+│   ├── main/
+│   │   ├── java/
+│   │   │   └── com/exceptionradar/
+│   │   │       │
+│   │   │       │  # ===== Phase 1: Foundation =====
+│   │   │       ├── ExceptionRadar.java
+│   │   │       ├── ExceptionRadarConfig.java
+│   │   │       ├── core/
+│   │   │       │   ├── ExceptionContext.java
+│   │   │       │   ├── ExceptionEvent.java
+│   │   │       │   └── CausationChain.java
+│   │   │       ├── event/
+│   │   │       │   ├── EventBus.java
+│   │   │       │   ├── EventDispatcher.java
+│   │   │       │   ├── EventSubscriber.java
+│   │   │       │   └── RingBuffer.java
+│   │   │       ├── handler/
+│   │   │       │   └── ExceptionHandler.java
+│   │   │       ├── config/
+│   │   │       │   └── ConfigLoader.java
+│   │   │       │
+│   │   │       │  # ===== Phase 2: Thread Tracking =====
+│   │   │       ├── thread/
+│   │   │       │   ├── ThreadMonitor.java
+│   │   │       │   ├── ThreadPoolWrapper.java
+│   │   │       │   ├── VirtualThreadMonitor.java
+│   │   │       │   └── UncaughtExceptionInterceptor.java
+│   │   │       ├── async/
+│   │   │       │   ├── AsyncTracker.java
+│   │   │       │   ├── CompletableFutureTracker.java
+│   │   │       │   └── AsyncContextPropagator.java
+│   │   │       ├── context/
+│   │   │       │   ├── ContextHolder.java
+│   │   │       │   └── ContextPropagator.java
+│   │   │       │
+│   │   │       │  # ===== Phase 3: Reporting =====
+│   │   │       ├── reporter/
+│   │   │       │   ├── Reporter.java
+│   │   │       │   ├── ConsoleReporter.java
+│   │   │       │   ├── FileReporter.java
+│   │   │       │   └── MetricsReporter.java
+│   │   │       │
+│   │   │       │  # ===== Phase 4: Process Tracking =====
+│   │   │       ├── process/
+│   │   │       │   ├── ProcessMonitor.java
+│   │   │       │   ├── ProcessWatcher.java
+│   │   │       │   ├── ProcessCommunicator.java
+│   │   │       │   ├── ProcessRegistry.java
+│   │   │       │   ├── ManagedProcess.java
+│   │   │       │   └── ipc/
+│   │   │       │       ├── IpcProtocol.java
+│   │   │       │       ├── UnixSocketServer.java
+│   │   │       │       └── UnixSocketClient.java
+│   │   │       │
+│   │   │       │  # ===== Phase 5: Analysis & Resilience =====
+│   │   │       ├── analyzer/
+│   │   │       │   ├── ExceptionAnalyzer.java
+│   │   │       │   ├── PatternDetector.java
+│   │   │       │   └── HistoricalAnalyzer.java
+│   │   │       ├── resilience/
+│   │   │       │   ├── RetryMechanism.java
+│   │   │       │   ├── RetryConfig.java
+│   │   │       │   ├── CircuitBreaker.java
+│   │   │       │   └── CircuitBreakerConfig.java
+│   │   │       │
+│   │   │       │  # ===== Phase 6: Dashboard & Alert =====
+│   │   │       ├── dashboard/
+│   │   │       │   ├── ExceptionDashboard.java
+│   │   │       │   ├── DashboardServer.java
+│   │   │       │   ├── WebSocketHandler.java
+│   │   │       │   ├── RestApiHandler.java
+│   │   │       │   └── StatisticsAggregator.java
+│   │   │       ├── alert/
+│   │   │       │   ├── AlertManager.java
+│   │   │       │   ├── AlertRule.java
+│   │   │       │   ├── AlertChannel.java
+│   │   │       │   └── channels/
+│   │   │       │       ├── SlackChannel.java
+│   │   │       │       ├── EmailChannel.java
+│   │   │       │       └── WebhookChannel.java
+│   │   │       │
+│   │   │       │  # ===== Phase 7: OS Level =====
+│   │   │       ├── agent/
+│   │   │       │   ├── ExceptionRadarAgent.java
+│   │   │       │   ├── AgentConfig.java
+│   │   │       │   ├── transformer/
+│   │   │       │   │   ├── ExecutorTransformer.java
+│   │   │       │   │   └── ThreadPoolTransformer.java
+│   │   │       │   └── native/
+│   │   │       │       ├── SignalHandler.java
+│   │   │       │       └── NativeCrashDetector.java
+│   │   │       │
+│   │   │       │  # ===== Phase 8: Distributed Tracing =====
+│   │   │       ├── tracing/
+│   │   │       │   ├── TracingIntegration.java
+│   │   │       │   ├── TraceContext.java
+│   │   │       │   └── TraceContextPropagator.java
+│   │   │       │
+│   │   │       └── Main.java
+│   │   │
+│   │   └── resources/
+│   │       ├── application.yml
+│   │       ├── logback.xml
+│   │       └── dashboard/
+│   │           ├── index.html
+│   │           ├── css/
+│   │           └── js/
+│   │
+│   └── test/
+│       └── java/
+│           └── com/exceptionradar/
+│               ├── core/
+│               ├── thread/
+│               ├── async/
+│               ├── process/
+│               ├── analyzer/
+│               ├── dashboard/
+│               ├── agent/
+│               └── integration/
+│
+├── build.gradle
+├── settings.gradle
+└── README.md
 ```
 
 ## 빌드 및 실행
@@ -290,64 +554,115 @@ public class ChildProcess {
 ./gradlew run
 ```
 
-### 디버그 모드
+### Fat JAR 생성
 ```bash
-./gradlew debugRun
+./gradlew fatJar
+java -jar build/libs/ExceptionRadar-1.0.0-SNAPSHOT-all.jar
 ```
 
-## 프로젝트 구조
-
-```
-ExceptionRadar/
-├── src/
-│   ├── main/
-│   │   ├── java/
-│   │   │   └── com/exceptionradar/
-│   │   │       ├── core/
-│   │   │       │   ├── ExceptionRadar.java
-│   │   │       │   ├── ExceptionContext.java
-│   │   │       │   └── ExceptionHandler.java
-│   │   │       ├── thread/
-│   │   │       │   ├── ThreadMonitor.java
-│   │   │       │   ├── ThreadPoolWrapper.java
-│   │   │       │   └── VirtualThreadMonitor.java
-│   │   │       ├── process/
-│   │   │       │   ├── ProcessMonitor.java
-│   │   │       │   ├── ProcessCommunicator.java
-│   │   │       │   └── ProcessRegistry.java
-│   │   │       ├── event/
-│   │   │       │   ├── EventBus.java
-│   │   │       │   ├── ExceptionEvent.java
-│   │   │       │   └── EventSubscriber.java
-│   │   │       ├── reporter/
-│   │   │       │   ├── Reporter.java
-│   │   │       │   ├── ConsoleReporter.java
-│   │   │       │   └── FileReporter.java
-│   │   │       └── Main.java
-│   │   └── resources/
-│   │       ├── logback.xml
-│   │       └── 
-
-│   └── test/
-│       └── java/
-│           └── com/exceptionradar/
-│               ├── core/
-│               ├── thread/
-│               └── process/
-├── build.gradle
-├── settings.gradle
-└── README.md
+### Java Agent 빌드 (Phase 7)
+```bash
+./gradlew agentJar
+java -javaagent:build/libs/exception-radar-agent.jar -jar your-app.jar
 ```
 
-## 향후 계획
+## 예제 코드
 
-1. **Kubernetes Integration**: K8s 환경에서 Pod 간 예외 추적
-2. **OpenTelemetry Support**: 분산 추적 표준 지원
-3. **Machine Learning**: 예외 패턴 학습 및 예측
-4. **Auto-healing**: 자동 복구 메커니즘
-5. **IDE Plugin**: IntelliJ IDEA, VS Code 플러그인
+### 기본 사용법
+
+```java
+public class Main {
+    public static void main(String[] args) {
+        // ExceptionRadar 초기화
+        ExceptionRadar radar = ExceptionRadar.builder()
+            .enableThreadTracking()
+            .enableProcessTracking()
+            .enableAsyncTracking()
+            .withReporter(new ConsoleReporter())
+            .withReporter(new FileReporter("exceptions.log"))
+            .withAnalyzer(new PatternDetector())
+            .build();
+
+        // 글로벌 레이더 설정
+        ExceptionRadar.setGlobal(radar);
+
+        // 대시보드 시작
+        radar.startDashboard(8080);
+
+        // 애플리케이션 로직
+        try (radar) {
+            runApplication();
+        }
+    }
+}
+```
+
+### 커스텀 예외 핸들러
+
+```java
+public class CustomExceptionHandler implements ExceptionHandler {
+    @Override
+    public void handle(ExceptionContext context) {
+        Throwable e = context.getException();
+        Thread thread = context.getThread();
+        Instant timestamp = context.getTimestamp();
+        CausationChain chain = context.getCausationChain();
+
+        // 커스텀 처리 로직
+        if (e instanceof CriticalException) {
+            alertOpsTeam(e, thread, timestamp);
+        }
+
+        // 인과 관계 로깅
+        chain.forEach(cause -> 
+            log.debug("Caused by: {}", cause)
+        );
+    }
+}
+```
+
+### 프로세스 간 통신
+
+```java
+// Parent Process
+public class ParentProcess {
+    public static void main(String[] args) {
+        ExceptionRadar radar = ExceptionRadar.builder()
+            .enableProcessTracking()
+            .build();
+
+        ProcessMonitor monitor = radar.createProcessMonitor();
+
+        ManagedProcess child = monitor.spawn(
+            "java", "-cp", "child.jar", "ChildProcess"
+        );
+
+        monitor.onException((processId, exception) -> {
+            System.err.printf("Process %d failed: %s%n",
+                processId, exception.getMessage());
+        });
+
+        // 활성 프로세스 모니터링
+        ProcessRegistry registry = monitor.getRegistry();
+        registry.onProcessExit((pid, exitCode) -> {
+            log.info("Process {} exited with code {}", pid, exitCode);
+        });
+
+        monitor.waitForAll();
+    }
+}
+
+// Child Process
+public class ChildProcess {
+    public static void main(String[] args) {
+        ExceptionRadar.enableIPCReporting();
+
+        // 이 예외는 부모 프로세스로 전달됨
+        throw new RuntimeException("Child process error");
+    }
+}
+```
 
 ## 라이센스
 
 MIT License
-

@@ -12,27 +12,95 @@ java {
 }
 
 dependencies {
-    // Logging
+    // ============================================================
+    // Phase 1: Foundation
+    // ============================================================
+
+    // Logging (SLF4J + Logback)
     implementation 'org.slf4j:slf4j-api:2.0.9'
     implementation 'ch.qos.logback:logback-classic:1.4.14'
 
-    // Async/Concurrent utilities
-    implementation 'org.apache.commons:commons-lang3:3.14.0'
+    // YAML 설정 파싱
+    implementation 'org.yaml:snakeyaml:2.2'
 
-    // Process handling
-    implementation 'org.buildobjects:jproc:2.8.2'
-
-    // JSON for inter-process communication
+    // JSON 직렬화 (IPC 통신, 파일 리포터용)
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.16.1'
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.16.1'
 
-    // Monitoring & Metrics
-    implementation 'io.micrometer:micrometer-core:1.12.2'
+    // ============================================================
+    // Phase 2: Thread Tracking
+    // ============================================================
+    // Java 21 내장 기능 사용 (추가 의존성 없음)
+    // - Virtual Threads
+    // - CompletableFuture
+    // - ExecutorService
 
+    // ============================================================
+    // Phase 3: Reporting
+    // ============================================================
+
+    // Metrics (Micrometer) - 선택적
+    compileOnly 'io.micrometer:micrometer-core:1.12.2'
+
+    // ============================================================
+    // Phase 4: Process Tracking
+    // ============================================================
+    // Java 16+ 내장 기능 사용 (추가 의존성 없음)
+    // - Unix Domain Socket (java.net.UnixDomainSocketAddress)
+    // - ProcessBuilder, ProcessHandle
+
+    // ============================================================
+    // Phase 5: Analysis & Resilience
+    // ============================================================
+    // 자체 구현 (추가 의존성 없음)
+    // - Pattern Detector
+    // - Circuit Breaker
+    // - Retry Mechanism
+
+    // ============================================================
+    // Phase 6: Dashboard & Alert
+    // ============================================================
+    // Java 내장 HTTP 서버 사용 (com.sun.net.httpserver)
+    // WebSocket은 직접 구현 또는 아래 라이브러리 사용
+
+    // WebSocket (선택적 - 직접 구현 대신 사용 가능)
+    // implementation 'org.java-websocket:Java-WebSocket:1.5.4'
+
+    // Email 발송 (Alert Channel용)
+    compileOnly 'com.sun.mail:jakarta.mail:2.0.1'
+
+    // ============================================================
+    // Phase 7: OS Level Monitoring
+    // ============================================================
+
+    // ByteBuddy (바이트코드 조작 - Java Agent용)
+    compileOnly 'net.bytebuddy:byte-buddy:1.14.11'
+    compileOnly 'net.bytebuddy:byte-buddy-agent:1.14.11'
+
+    // JNI는 네이티브 코드로 별도 빌드
+
+    // ============================================================
+    // Phase 8: Distributed Tracing
+    // ============================================================
+
+    // OpenTelemetry (선택적)
+    compileOnly 'io.opentelemetry:opentelemetry-api:1.34.1'
+    compileOnly 'io.opentelemetry:opentelemetry-sdk:1.34.1'
+
+    // ============================================================
     // Testing
+    // ============================================================
+
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
     testImplementation 'org.assertj:assertj-core:3.25.1'
+    testImplementation 'org.awaitility:awaitility:4.2.0'
     testImplementation 'org.mockito:mockito-core:5.10.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // 테스트에서 선택적 의존성 사용
+    testImplementation 'io.micrometer:micrometer-core:1.12.2'
+    testImplementation 'net.bytebuddy:byte-buddy:1.14.11'
+    testImplementation 'net.bytebuddy:byte-buddy-agent:1.14.11'
 }
 
 application {
@@ -48,35 +116,91 @@ tasks.named('test') {
     }
 }
 
-tasks.withType(JavaCompile) {
+tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.compilerArgs += [
-            '-parameters',
-            '--enable-preview'
+            '-parameters',          // 메서드 파라미터 이름 보존
+            '--enable-preview'      // Preview 기능 활성화
     ]
 }
 
-tasks.withType(JavaExec) {
+tasks.withType(JavaExec).configureEach {
     jvmArgs += '--enable-preview'
 }
 
-tasks.withType(Test) {
+tasks.withType(Test).configureEach {
     jvmArgs += '--enable-preview'
 }
 
-// Custom task for running with debug
-task debugRun(type: JavaExec) {
-    classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'com.exceptionradar.Main'
-    jvmArgs = [
-            '-Xdebug',
-            '-Xrunjdwp:transport=dt_socket,server=y,suspend=n,address=5005',
-            '--enable-preview'
-    ]
+// ============================================================
+// JAR Tasks
+// ============================================================
+
+// 기본 JAR
+jar {
+    manifest {
+        attributes(
+                'Implementation-Title': project.name,
+                'Implementation-Version': project.version,
+                'Main-Class': application.mainClass.get()
+        )
+    }
 }
 
-// Wrapper task
+// Fat JAR (모든 의존성 포함)
+tasks.register('fatJar', Jar) {
+    archiveClassifier = 'all'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    from sourceSets.main.output
+
+    dependsOn configurations.runtimeClasspath
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+
+    manifest {
+        attributes(
+                'Main-Class': application.mainClass.get()
+        )
+    }
+}
+
+// Java Agent JAR (Phase 7)
+tasks.register('agentJar', Jar) {
+    archiveClassifier = 'agent'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    from sourceSets.main.output
+
+    // Agent에 필요한 의존성만 포함
+    dependsOn configurations.runtimeClasspath
+    from {
+        configurations.runtimeClasspath
+                .filter {
+                    it.name.contains('byte-buddy') ||
+                            it.name.contains('slf4j') ||
+                            it.name.contains('logback')
+                }
+                .collect { it.isDirectory() ? it : zipTree(it) }
+    }
+
+    manifest {
+        attributes(
+                'Premain-Class': 'com.exceptionradar.agent.ExceptionRadarAgent',
+                'Agent-Class': 'com.exceptionradar.agent.ExceptionRadarAgent',
+                'Can-Redefine-Classes': 'true',
+                'Can-Retransform-Classes': 'true',
+                'Can-Set-Native-Method-Prefix': 'true'
+        )
+    }
+}
+
+// ============================================================
+// Gradle Wrapper
+// ============================================================
+
 wrapper {
     gradleVersion = '8.5'
-    distributionType = Wrapper.DistributionType.ALL
+    distributionType = Wrapper.DistributionType.BIN
 }
