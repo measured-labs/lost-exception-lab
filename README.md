@@ -1,4 +1,15 @@
-# ExceptionRadar
+# lost-exception-lab
+
+옛 이름은 ExceptionRadar다. 아래 본문의 ExceptionRadar는 그 이름 그대로 둔 설계안이다.
+
+## 상태와 다음 할 일
+
+- 질문: 멀티스레드 · 멀티프로세스 경계에서 예외는 어디로 사라지나. 다른 스레드(`ExecutorService`, `CompletableFuture`, 가상 스레드)나 자식 프로세스에서 난 예외를 호출한 쪽이 알 수 있는가.
+- 상태: **예정**. 있는 것은 이 README(설계 · 로드맵), `build.gradle` · `settings.gradle`, 설정 파일(`application.yml` · `application.properties` · `logback.xml`)뿐이다. Java 소스와 테스트는 없고, 아래 로드맵 체크리스트도 전부 미체크다. 실행 결과 기록도 없다.
+- 이 README의 코드 예시 · 설정 · 프로젝트 구조 · 실행 명령은 설계안이다. 그 API(`ExceptionRadar.builder()` 등)와 `Main.java`는 아직 없다.
+- 다음 할 일:
+  1. 질문을 랩 형태로 다시 세운다. 예외가 사라지는 경우를 먼저 재현하는 베이스라인을 만들고, 그다음 해법을 비교한다. 이 일은 다음 명세에서 한다.
+  2. 그때 아래 8단계 로드맵 중 무엇을 남길지 정하고, 단계 문서는 `docs/adr/` ADR 형식으로 쓴다.
 
 > Java 애플리케이션에서 프로세스 및 스레드 경계를 넘어 예외를 추적하고 감시하는 시스템
 
@@ -174,6 +185,8 @@ try {
 
 ## 주요 기능
 
+> 설계안이다. 아래 API는 아직 없다.
+
 ### 1. Thread Exception Tracking
 
 ```java
@@ -296,6 +309,8 @@ radar.enableDistributedTracing(openTelemetry);
 
 ## 설정
 
+> 설계안이다. `src/main/resources/application.yml`은 있지만, 이 설정을 읽는 코드는 아직 없다.
+
 ### application.yml
 
 ```yaml
@@ -404,6 +419,8 @@ exception-radar:
 ```
 
 ## 프로젝트 구조
+
+> 설계안이다. 지금 있는 것은 `build.gradle` · `settings.gradle` · `src/main/resources/`의 설정 파일뿐이다. `src/main/java/` 아래 클래스(`Main.java` 포함), `src/test/`, `dashboard/` 정적 파일은 아직 없다.
 
 ```
 ExceptionRadar/
@@ -535,6 +552,8 @@ ExceptionRadar/
 
 ## 빌드 및 실행
 
+> 아직 없음. 소스가 없고 `build.gradle`의 `mainClass`(`com.exceptionradar.Main`)도 없어서 아래 명령은 지금 동작하지 않는다. Gradle wrapper jar(`gradle/wrapper/gradle-wrapper.jar`)도 저장소에 없다.
+
 ### 요구사항
 - Java 21 이상
 - Gradle 8.5 이상
@@ -567,6 +586,8 @@ java -javaagent:build/libs/exception-radar-agent.jar -jar your-app.jar
 ```
 
 ## 예제 코드
+
+> 설계안이다. 아래 클래스는 아직 없다.
 
 ### 기본 사용법
 
